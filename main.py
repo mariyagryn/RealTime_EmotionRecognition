@@ -1,7 +1,8 @@
-# main.py — Real-Time Emotion Recognition (DeepFace + OpenCV)
+# Real-Time Emotion Recognition (DeepFace + OpenCV)
 # Keys: D — switch detector, Q — quit
 import cv2, numpy as np, time, os
 from deepface import DeepFace
+from modules import stats  # <-- наш SQLite-облік сегментів
 
 LABELS = ['angry','disgust','fear','happy','sad','surprise','neutral']
 DETECTORS = ['opencv','mediapipe','retinaface']  # press D to switch
@@ -48,20 +49,40 @@ while True:
     if dt > 0: fps = 0.9*fps + 0.1*(1.0/dt)
 
     try:
-        res = DeepFace.analyze(frame, actions=['emotion'],
-                               detector_backend=DETECTOR,
-                               enforce_detection=False, silent=True)
+        res = DeepFace.analyze(
+            frame, actions=['emotion'],
+            detector_backend=DETECTOR,
+            enforce_detection=False, silent=True
+        )
         r = res[0] if isinstance(res, list) else res
         probs = np.array([r['emotion'][k] for k in LABELS], float)
         ema = probs if ema is None else ALPHA*probs + (1-ALPHA)*ema
         idx = int(np.argmax(ema)); dominant = LABELS[idx]; conf = float(ema[idx])
 
-        if curr is None: curr, curr_start = dominant, now
-        if dominant != curr:
-            t_cum[curr] += now - curr_start
+        # 1) ініціалізація стану
+        if curr is None:
             curr, curr_start = dominant, now
-        live_cum = t_cum.copy(); live_cum[curr] = live_cum.get(curr,0.0) + (now - curr_start)
 
+        # 2) якщо емоція змінилась — закриваємо попередній сегмент ОДИН раз
+        if dominant != curr:
+            try:
+                if curr is not None and curr_start is not None:
+                    stats.add_segment(curr, int(curr_start), int(now))
+            except Exception as e:
+                print("[stats] segment save error:", e)
+
+            # локальні підсумки за сесію
+            if curr is not None and curr_start is not None:
+                t_cum[curr] += now - curr_start
+
+            # перехід у новий стан
+            curr, curr_start = dominant, now
+
+        # live-лічильник для правої панелі
+        live_cum = t_cum.copy()
+        live_cum[curr] = live_cum.get(curr, 0.0) + (now - curr_start)
+
+        # 3) прості реакції (тости/voice) з кулдауном
         since = now - curr_start
         if (now - last_trigger_t) > cooldown_s:
             if curr == 'sad' and since >= 10:
@@ -74,6 +95,7 @@ while True:
                 msg = "🤖 Нудно? Давай мікрочелендж 💡"; speak("Можливо, невеличкий челендж?")
                 last_trigger_t = now; msg_till = now + 4
 
+        # ---- рендер ----
         cv2.putText(frame, f"{dominant} {conf:.1f}%", (20,40),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
 
@@ -96,18 +118,26 @@ while True:
             y += 28
 
         if now < msg_till and msg:
-            cv2.rectangle(frame, (40, frame.shape[0]-80), (frame.shape[1]-40, frame.shape[0]-30), (0,0,0), -1)
+            cv2.rectangle(frame, (40, frame.shape[0]-80),
+                          (frame.shape[1]-40, frame.shape[0]-30), (0,0,0), -1)
             cv2.putText(frame, msg, (60, frame.shape[0]-45),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,255), 2)
 
     except Exception:
-        cv2.putText(frame, "no face", (20,40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
+        cv2.putText(frame, "no face", (20,40),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
 
     cv2.imshow("Emotion Recognition (Q quit | D detector)", frame)
     key = cv2.waitKey(1) & 0xFF
     if key in (ord('q'), ord('Q')):
+        # закриваємо фінальний сегмент перед виходом
+        end_now = time.time()
         if curr is not None and curr_start is not None:
-            t_cum[curr] += time.time() - curr_start
+            t_cum[curr] += end_now - curr_start
+            try:
+                stats.add_segment(curr, int(curr_start), int(end_now))
+            except Exception as e:
+                print("[stats] final segment save error:", e)
         break
     elif key in (ord('d'), ord('D')):
         det_i = (det_i + 1) % len(DETECTORS)
