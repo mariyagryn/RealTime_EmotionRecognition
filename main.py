@@ -1,46 +1,123 @@
 # Real-Time Emotion Recognition (DeepFace + OpenCV)
-# Keys: D — switch detector, Q — quit
-import cv2, numpy as np, time, os
+import os, time, cv2, numpy as np
 from deepface import DeepFace
-from modules import stats  # <-- наш SQLite-облік сегментів
+from modules import stats
+from PIL import Image, ImageDraw, ImageFont
 
 LABELS = ['angry','disgust','fear','happy','sad','surprise','neutral']
-DETECTORS = ['opencv','mediapipe','retinaface']  # press D to switch
+DETECTORS = ['opencv','mediapipe','retinaface']
 det_i = 0
 DETECTOR = DETECTORS[det_i]
 
 ALPHA = 0.3
 CAM_INDEX = 0
-RES_W, RES_H = 960, 540
+RES_W, RES_H = 480, 270
+ANALYZE_EVERY = 0.50
 
-ema = None
-fps = 0.0
-t_prev = time.time()
+NAV_H = 48
+NAV_ITEMS = ["Help", "Snap", "Log", "Exit"]
+NAV_RECTS = []
 
-t_cum = {k: 0.0 for k in LABELS}
-curr = None
-curr_start = None
-
-cooldown_s = 60
-last_trigger_t = 0.0
-msg = ""
-msg_till = 0.0
-
-def speak(text):
-    try: os.system(f'say "{text}" &')
+def speak(t):
+    try: os.system(f'say "{t}" &')
     except Exception: pass
 
 def fmt_s(x):
     m = int(x)//60; s = int(x)%60
     return f"{m:02d}:{s:02d}"
 
+def draw_text_unicode(frame_bgr, text, pos, color=(0,255,255), size=24):
+    try:
+        font_paths = [
+            "/Library/Fonts/Arial Unicode.ttf",
+            "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+            "/Library/Fonts/Arial.ttf",
+            "/System/Library/Fonts/SFNS.ttf"
+        ]
+        fp = next((p for p in font_paths if os.path.exists(p)), None)
+        if fp is None: raise RuntimeError("no font")
+        img = Image.fromarray(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
+        draw = ImageDraw.Draw(img)
+        draw.text(pos, text, font=ImageFont.truetype(fp, size), fill=(color[2], color[1], color[0]))
+        return cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+    except Exception:
+        cv2.putText(frame_bgr, text.encode('ascii','ignore').decode(), pos, cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+        return frame_bgr
+
+def draw_transparent_rect(img, p1, p2, color=(30,30,30), alpha=0.85):
+    overlay = img.copy()
+    cv2.rectangle(overlay, p1, p2, color, -1)
+    cv2.addWeighted(overlay, alpha, img, 1-alpha, 0, img)
+
+def draw_nav(frame, right_edge_x):
+    global NAV_RECTS
+    NAV_RECTS = []
+    draw_transparent_rect(frame, (0,0), (right_edge_x, NAV_H), (30,30,30), 0.9)
+    x = 12; y1 = 6
+    for name in NAV_ITEMS:
+        (tw, th), _ = cv2.getTextSize(name, cv2.FONT_HERSHEY_SIMPLEX, 0.75, 2)
+        w = tw + 28; h = NAV_H - 20
+        x2 = min(x + w, right_edge_x - 12)
+        if x2 <= x: break
+        cv2.putText(frame, name, (x+14, y1+h-12), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255,255,255), 2, cv2.LINE_AA)
+        NAV_RECTS.append((name, x, y1, x2, y1+h))
+        x = x2 + 16
+
+def nav_hit(x, y):
+    for name, x1, y1, x2, y2 in NAV_RECTS:
+        if x1 <= x <= x2 and y1 <= y <= y2:
+            return name
+    return None
+
+show_help = False
+logging_on = False
+running = True
+
+def on_mouse(event, x, y, flags, param):
+    global running, show_help, logging_on
+    if event == cv2.EVENT_LBUTTONUP:
+        hit = nav_hit(x, y)
+        if hit == "Exit":
+            running = False
+        elif hit == "Help":
+            show_help = not show_help
+        elif hit == "Snap":
+            os.makedirs("logs", exist_ok=True)
+            cv2.imwrite(f"logs/snap_{int(time.time())}.png", param["frame"])
+        elif hit == "Log":
+            logging_on = not logging_on
+
+try:
+    _ = DeepFace.analyze(np.zeros((224,224,3), dtype=np.uint8),
+                         actions=['emotion'], detector_backend='opencv',
+                         enforce_detection=False, silent=True)
+except Exception:
+    pass
+
+ema = None; fps = 0.0; t_prev = time.time()
+t_cum = {k: 0.0 for k in LABELS}
+curr = None; curr_start = None
+cooldown_s = 60; last_trigger_t = 0.0; msg = ""; msg_till = 0.0
+
 cap = cv2.VideoCapture(CAM_INDEX)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, RES_W)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, RES_H)
+cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+cap.set(cv2.CAP_PROP_FPS, 30)
+cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+last_inf_t = 0.0
+last_result = None
+
+win = "Emotion Recognition (Q quit | D detector)"
+cv2.namedWindow(win)
+cv2.setMouseCallback(win, on_mouse, param={"frame": None})
 
 print("Keys: [D] switch detector  |  [Q] quit")
 
-while True:
+while running:
+    for _ in range(2):
+        cap.grab()
     ok, frame = cap.read()
     if not ok: break
 
@@ -49,54 +126,48 @@ while True:
     if dt > 0: fps = 0.9*fps + 0.1*(1.0/dt)
 
     try:
-        res = DeepFace.analyze(
-            frame, actions=['emotion'],
-            detector_backend=DETECTOR,
-            enforce_detection=False, silent=True
-        )
-        r = res[0] if isinstance(res, list) else res
+        do_infer = (now - last_inf_t) >= ANALYZE_EVERY or last_result is None
+        if do_infer:
+            res = DeepFace.analyze(frame, actions=['emotion'],
+                                   detector_backend=DETECTOR,
+                                   enforce_detection=False, silent=True)
+            last_result = res[0] if isinstance(res, list) else res
+            last_inf_t = now
+
+        r = last_result
         probs = np.array([r['emotion'][k] for k in LABELS], float)
         ema = probs if ema is None else ALPHA*probs + (1-ALPHA)*ema
         idx = int(np.argmax(ema)); dominant = LABELS[idx]; conf = float(ema[idx])
 
-        # 1) ініціалізація стану
         if curr is None:
             curr, curr_start = dominant, now
 
-        # 2) якщо емоція змінилась — закриваємо попередній сегмент ОДИН раз
         if dominant != curr:
             try:
                 if curr is not None and curr_start is not None:
                     stats.add_segment(curr, int(curr_start), int(now))
             except Exception as e:
                 print("[stats] segment save error:", e)
-
-            # локальні підсумки за сесію
             if curr is not None and curr_start is not None:
                 t_cum[curr] += now - curr_start
-
-            # перехід у новий стан
             curr, curr_start = dominant, now
 
-        # live-лічильник для правої панелі
         live_cum = t_cum.copy()
         live_cum[curr] = live_cum.get(curr, 0.0) + (now - curr_start)
 
-        # 3) прості реакції (тости/voice) з кулдауном
         since = now - curr_start
         if (now - last_trigger_t) > cooldown_s:
             if curr == 'sad' and since >= 10:
-                msg = "🤖 Бачу сум ≥10с. Тримайся!"; speak("Бачу сум. Тримайся, все буде добре.")
+                msg = "Бачу сум ≥ 10с. Тримайся!"; speak("Бачу сум. Тримайся, все буде добре.")
                 last_trigger_t = now; msg_till = now + 4
             elif curr == 'happy' and since >= 6:
-                msg = "🤖 Хеей! Сяєш від щастя 😄"; speak("Що сталося? Ти сяєш від щастя!")
+                msg = "Хеей! Сяєш від щастя!"; speak("Що сталося? Ти сяєш від щастя!")
                 last_trigger_t = now; msg_till = now + 4
             elif curr == 'neutral' and since >= 15:
-                msg = "🤖 Нудно? Давай мікрочелендж 💡"; speak("Можливо, невеличкий челендж?")
+                msg = "Нудно? Давай мікрочелендж"; speak("Можливо, невеличкий челендж?")
                 last_trigger_t = now; msg_till = now + 4
 
-        # ---- рендер ----
-        cv2.putText(frame, f"{dominant} {conf:.1f}%", (20,40),
+        cv2.putText(frame, f"{dominant} {conf:.1f}%", (20, NAV_H+28),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
 
         reg = r.get('region', None)
@@ -104,10 +175,13 @@ while True:
             x,y,w,h = reg.get('x',0), reg.get('y',0), reg.get('w',0), reg.get('h',0)
             cv2.rectangle(frame, (x,y), (x+w,y+h), (0,255,0), 2)
 
-        panel_w = 260; x0 = frame.shape[1] - panel_w
+        panel_w = 260
+        x0 = frame.shape[1] - panel_w
+        draw_nav(frame, right_edge_x=x0)
+
         cv2.rectangle(frame, (x0,0), (frame.shape[1], frame.shape[0]), (30,30,30), -1)
         cv2.putText(frame, f"{DETECTOR} | {fps:,.1f} FPS", (x0+10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200,200,0), 2)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200,200,200), 2)
         cv2.putText(frame, "Time in emotions:", (x0+10, 60),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 1)
         y = 90
@@ -117,32 +191,43 @@ while True:
                         (0,255,0) if k==curr else (220,220,220), 2 if k==curr else 1)
             y += 28
 
+        if show_help:
+            lines = ["D is switch detector", "Q is quit", "Snap is save frame", "Log is toggle (reserved)"]
+            hx1, hy1 = 12, NAV_H + 10
+            (tw, th), _ = cv2.getTextSize(max(lines, key=len), cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+            hw = tw + 30; hh = 12 + len(lines)*26
+            draw_transparent_rect(frame, (hx1-6, hy1-8), (hx1+hw, hy1-8+hh), (0,0,0), 0.6)
+            yy = hy1
+            for hl in lines:
+                cv2.putText(frame, hl, (hx1, yy), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,255), 2, cv2.LINE_AA)
+                yy += 26
+
         if now < msg_till and msg:
-            cv2.rectangle(frame, (40, frame.shape[0]-80),
-                          (frame.shape[1]-40, frame.shape[0]-30), (0,0,0), -1)
-            cv2.putText(frame, msg, (60, frame.shape[0]-45),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,255), 2)
+            y1 = frame.shape[0]-90; y2 = frame.shape[0]-28
+            draw_transparent_rect(frame, (40,y1), (frame.shape[1]-40, y2), (0,0,0), 0.65)
+            frame = draw_text_unicode(frame, msg, (60, y2-15), (0,255,255), 24)
 
     except Exception:
-        cv2.putText(frame, "no face", (20,40),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
+        cv2.putText(frame, "no face", (20, NAV_H+28), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
 
-    cv2.imshow("Emotion Recognition (Q quit | D detector)", frame)
+    cv2.setMouseCallback(win, on_mouse, param={"frame": frame})
+    cv2.imshow(win, frame)
+
     key = cv2.waitKey(1) & 0xFF
     if key in (ord('q'), ord('Q')):
-        # закриваємо фінальний сегмент перед виходом
-        end_now = time.time()
-        if curr is not None and curr_start is not None:
-            t_cum[curr] += end_now - curr_start
-            try:
-                stats.add_segment(curr, int(curr_start), int(end_now))
-            except Exception as e:
-                print("[stats] final segment save error:", e)
-        break
+        running = False
     elif key in (ord('d'), ord('D')):
         det_i = (det_i + 1) % len(DETECTORS)
         DETECTOR = DETECTORS[det_i]
         print(f"[detector] -> {DETECTOR}")
+
+end_now = time.time()
+if curr is not None and curr_start is not None:
+    t_cum[curr] += end_now - curr_start
+    try:
+        stats.add_segment(curr, int(curr_start), int(end_now))
+    except Exception as e:
+        print("[stats] final segment save error:", e)
 
 cap.release(); cv2.destroyAllWindows()
 
