@@ -336,7 +336,7 @@ def main():
             cv2.putText(img, msg, ((img.shape[1]-tw)//2, img.shape[0]-60),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (180,220,255), 2)
             cv2.imshow(win, img); cv2.waitKey(900)
-        else:  # "exit" або невідоме
+        else:
             break
     cv2.destroyAllWindows()
 
