@@ -5,11 +5,13 @@ from config import WINDOW_TITLE
 
 MENU_BTNS = [
     ("Start Analysis", "start"),
+    ("Camera Preview", "preview"),
     ("Statistics",    "stats"),
     ("Settings",      "settings"),
     ("Help",          "help"),
     ("Exit",          "exit"),
 ]
+
 MENU_RECTS = []
 MENU_CHOICE = None
 

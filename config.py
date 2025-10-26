@@ -10,3 +10,4 @@ NAV_H = 48
 NAV_ITEMS = ["Help", "Snap", "Log", "Exit"]
 
 WINDOW_TITLE = "Emotion App"
+ENGINE = "fer"
