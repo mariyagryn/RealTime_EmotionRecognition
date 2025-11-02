@@ -1,7 +1,9 @@
-# ui/live.py — асинхронний Live-режим без лагів (FER + стабілізація)
+# ui/live.py — асинхронний Live-режим (FER + стабілізація) без коду меню/прев'ю
 import time
-import cv2
 from concurrent.futures import ThreadPoolExecutor
+from utils.app_settings import load as load_settings
+
+import cv2
 
 from config import (
     LABELS, DETECTORS, CAM_INDEX, RES_W, RES_H, NAV_H, WINDOW_TITLE
@@ -11,41 +13,71 @@ from modules import stats
 
 from agent.capture import AsyncCamera
 
-from agent.engine_fer import FastFerAnalyzer as EmotionAnalyzer
+from agent.analyzer_fast import FastEmotionAnalyzer as EmotionAnalyzer
 
-ANALYZE_EVERY = 1.2
-MIN_CONF      = 35.0
-HOLD_SEC      = 1.0
+# --- дефолтні параметри (будуть перекриті settings.json) ---
+ANALYZE_EVERY = 1.2      # сек між інференсами
+MIN_CONF      = 35.0     # мінімальна впевненість для перемикання
+HOLD_SEC      = 1.0      # скільки тримати нову емоцію, щоб вважати її стабільною
 
-# стан UI
+# стан UI (перемикач детектора по клавіші D)
 det_i = 0
 DETECTOR = DETECTORS[det_i]
+
 show_help = False
-logging_on = False
-running = True
+running   = True
+
 
 def _on_mouse(event, x, y, flags, param):
-    """Мінімальний хендлер миші (можеш додати навігацію по кнопках зверху)."""
+    """Хендлер миші (поки не використовується)."""
     pass
 
+
+def _parse_resolution(s: str, fallback=(RES_W, RES_H)) -> tuple[int, int]:
+    try:
+        w, h = map(int, str(s).lower().split("x"))
+        return w, h
+    except Exception:
+        return fallback
+
+
 def run_live():
-    global det_i, DETECTOR, running, show_help, logging_on
-    running, show_help, logging_on = True, False, False
+    """
+    Асинхронний Live-потік:
+      - камера читається окремим тредом (AsyncCamera)
+      - інференс раз на ANALYZE_EVERY секунд у ThreadPool
+      - стабілізація емоції (HOLD_SEC + поріг MIN_CONF)
+      - кумулятивний час по емоціях
+    """
+    global det_i, DETECTOR, running, show_help, ANALYZE_EVERY
 
-    cam = AsyncCamera(index=CAM_INDEX, width=RES_W, height=RES_H)
-    an  = EmotionAnalyzer(alpha=0.3)
+    # --- підтягуємо налаштування ---
+    cfg = load_settings()
+    ANALYZE_EVERY = float(cfg.get("analyze_every", ANALYZE_EVERY))
+    ema_alpha     = float(cfg.get("ema", 0.3))
+    det_name      = cfg.get("detector", DETECTOR)
+    if det_name in DETECTORS:
+        det_i = DETECTORS.index(det_name)
+        DETECTOR = det_name
+    cam_w, cam_h  = _parse_resolution(cfg.get("resolution", "640x360"))
 
-    pool = ThreadPoolExecutor(max_workers=1)
-    pending = None
+    running   = True
+    show_help = False
+
+    cam = AsyncCamera(index=CAM_INDEX, width=cam_w, height=cam_h)
+    an  = EmotionAnalyzer(alpha=ema_alpha)
+
+    pool    = ThreadPoolExecutor(max_workers=1)
+    pending = None        # Future
     last_res = None
     last_inf_t = 0.0
 
     fps, t_prev = 0.0, time.time()
     t_cum = {k: 0.0 for k in LABELS}
 
-    stable = None
-    stable_since = None
-    candidate = None
+    stable          = None     # поточна стабільна емоція
+    stable_since    = None
+    candidate       = None     # претендент на нову емоцію
     candidate_since = 0.0
 
     cv2.namedWindow(WINDOW_TITLE)
@@ -59,12 +91,14 @@ def run_live():
                 time.sleep(0.01)
                 continue
 
+            # FPS
             now = time.time()
-            dt = now - t_prev
+            dt  = now - t_prev
             t_prev = now
             if dt > 0:
                 fps = 0.9 * fps + 0.1 * (1.0 / dt)
 
+            # асинхронний інференс
             if (pending is None) and ((now - last_inf_t) >= ANALYZE_EVERY):
                 pending = pool.submit(an.infer, frame.copy())
                 last_inf_t = now
@@ -76,6 +110,7 @@ def run_live():
                     last_res = None
                 pending = None
 
+            # стабілізація емоції + лічильники
             if last_res:
                 label = last_res["dominant"]
                 conf  = float(last_res["conf"])
@@ -101,9 +136,17 @@ def run_live():
                     candidate = None
 
                 shown = stable or label
-                cv2.putText(frame, f"{shown} {conf:.1f}%", (20, NAV_H + 28),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                cv2.putText(
+                    frame,
+                    f"{shown} {conf:.1f}%",
+                    (20, NAV_H + 28),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1,
+                    (0, 255, 0),
+                    2,
+                )
 
+            # правий інфо-панель
             panel_w = 260
             x0 = frame.shape[1] - panel_w
 
@@ -124,12 +167,18 @@ def run_live():
                 val = live_cum.get(k, 0.0)
                 mm, ss = int(val) // 60, int(val) % 60
                 active = (k == active_label)
-                cv2.putText(frame, f"{k:<9} {mm:02d}:{ss:02d}",
-                            (x0 + 10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                            (0, 255, 0) if active else (220, 220, 220),
-                            2 if active else 1)
+                cv2.putText(
+                    frame,
+                    f"{k:<9} {mm:02d}:{ss:02d}",
+                    (x0 + 10, y),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (0, 255, 0) if active else (220, 220, 220),
+                    2 if active else 1
+                )
                 y += 28
 
+            # help overlay (якщо треба розширимо)
             if show_help:
                 lines = ["D switch detector", "Q quit", "Esc back to menu"]
                 hx1, hy1 = 12, NAV_H + 10
@@ -150,8 +199,9 @@ def run_live():
             if key in (ord('q'), ord('Q'), 27):
                 running = False
             elif key in (ord('d'), ord('D')):
-                det_i = (det_i + 1) % len(DETECTORS)
-                DETECTOR = DETECTORS[det_i]
+                # ручне перемикання детектора
+                det_i_local = (DETECTORS.index(DETECTOR) + 1) % len(DETECTORS)
+                DETECTOR = DETECTORS[det_i_local]
                 print(f"[detector UI] -> {DETECTOR}")
 
     finally:

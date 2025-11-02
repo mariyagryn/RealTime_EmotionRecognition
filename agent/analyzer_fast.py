@@ -1,6 +1,9 @@
 # швидкий аналіз: mediapipe знаходить bbox, DeepFace аналізує лише кроп
 import cv2, numpy as np
-import mediapipe as mp
+try:
+    import mediapipe as mp
+except Exception:
+    mp = None
 from deepface import DeepFace
 
 LABELS = ['angry','disgust','fear','happy','sad','surprise','neutral']
@@ -54,3 +57,4 @@ class FastEmotionAnalyzer:
             "probs": {k: float(self.ema[i]) for i,k in enumerate(LABELS)},
             "has_face": has_face
         }
+
