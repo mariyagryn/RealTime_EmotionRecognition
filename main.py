@@ -1,6 +1,4 @@
 # main.py
-from ui.settings_ctk import show_settings_gui
-# main.py
 def main():
     try:
         import importlib

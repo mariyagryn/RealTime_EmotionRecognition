@@ -49,6 +49,13 @@ class AsyncCamera(Camera):
         return self.q[-1] if self.q else None
 
     def stop(self):
-        self._run = False
-        time.sleep(0.02)
-        self.release()
+        self._alive = False
+        try:
+            self._t.join(timeout=1.0)
+        except Exception:
+            pass
+        try:
+            self.cap.release()
+        except Exception:
+            pass
+
