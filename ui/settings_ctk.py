@@ -7,13 +7,13 @@ from utils.app_settings import load, save
 import tkinter as tk
 
 PALETTE = {
-    "bg_panel":   "#0e1b2d",
+    "bg_panel": "#0e1b2d",
     "bg_sidebar": "#0a1422",
-    "accent":     "#00D1FF",
-    "accent_h":   "#16E0FF",
-    "muted":      "#94a3b8",
-    "text":       "#E8F1FF",
-    "border":     "#16324a",
+    "accent": "#00D1FF",
+    "accent_h": "#16E0FF",
+    "muted": "#94a3b8",
+    "text": "#E8F1FF",
+    "border": "#16324a",
 }
 
 def set_ctk_theme():
