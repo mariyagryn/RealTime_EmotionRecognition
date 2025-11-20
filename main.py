@@ -1,13 +1,12 @@
 # main.py
 def main():
     try:
-        import importlib
-        settings = importlib.import_module("ui.settings_ctk")
-        return settings.show_settings_gui()
+        from ui.welcome_ctk import show_welcome
+        return show_welcome()
     except Exception as e:
-        print("CTk GUI недоступний — відкриваю камеру:", e)
-        from ui.background import main as bg_main
-        return bg_main()
+        print("Welcome screen failed, opening Live directly:", e)
+        from ui.live import run_live
+        return run_live()
 
 if __name__ == "__main__":
     main()

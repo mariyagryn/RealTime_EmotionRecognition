@@ -7,26 +7,21 @@ _SETTINGS_PATH = os.path.join(os.path.dirname(__file__), "..", "settings.json")
 _SETTINGS_PATH = os.path.abspath(_SETTINGS_PATH)
 
 _DEFAULTS: Dict[str, Any] = {
-    # core
     "background_mode": False,
-    "backend": "deepface",          # "deepface" | "fer" | "dummy"
-    "detector": "opencv",           # поки зарезервовано
+    "backend": "deepface",
+    "detector": "opencv",
     "resolution": "640x360",
     "camera_index": 0,
-    # live loop
     "analyze_every": 1.0,
     "ema": 0.30,
     "min_conf": 48.0,
     "hold_sec": 1.2,
-    # privacy
     "privacy_blur": False,
     "privacy_save_stats": True,
     "privacy_save_frames": False,
-    # ui
     "tts_enabled": False,
     "language": "UA",
     "theme": "Dark",
-    # rules (плейсхолдери)
     "rule_breathing": False,
     "rule_pomodoro": False,
     "rule_mirror": False,
