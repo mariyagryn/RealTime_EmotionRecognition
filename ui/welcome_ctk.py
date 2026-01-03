@@ -1,24 +1,16 @@
 # ui/welcome_ctk.py
 from __future__ import annotations
+
 import os
 import sys
 import subprocess
+from tkinter import StringVar
 
 import customtkinter as ctk
-from tkinter import StringVar
 from PIL import Image, ImageDraw
 
 from utils.app_settings import load as load_cfg, save as save_cfg
 
-
-PALETTE = {
-    "bg":      "#020617",
-    "panel":   "#020617",
-    "accent":  "#00D1FF",
-    "accent_h":"#16E0FF",
-    "text":    "#E8F1FF",
-    "muted":   "#94a3b8",
-}
 
 WINDOW_W = 1024
 WINDOW_H = 640
@@ -29,10 +21,47 @@ def _asset_path(name: str) -> str:
     return os.path.join(base, "assets", name)
 
 
-def _create_gradient_button_img(width: int = 190, height: int = 40) -> Image.Image:
-    """Градієнтна pill-кнопка cyan → blue як на макеті."""
-    c1 = (0, 91, 197)
-    c2 = (80, 140, 255)
+PALETTES = {
+    "dark": {
+        "bg": "#020617",
+        "card": "#040c24",
+        "card_border": "#1e40af",
+        "title": "#E8F1FF",
+        "text": "#E8F1FF",
+        "muted": "#94a3b8",
+        "tagline": "#92C1FF",
+        "menu_bg": "#020617",
+        "menu_btn": "#111827",
+        "menu_btn_h": "#1f2937",
+        "menu_dd_bg": "#020617",
+        "menu_dd_text": "#E8F1FF",
+        "btn_text": "#020617",
+    },
+    "light": {
+        "bg": "#EAF3FF",
+        "card": "#F6FAFF",
+        "card_border": "#7BB7FF",
+        "title": "#0B1B33",
+        "text": "#0B1B33",
+        "muted": "#4B6A8F",
+        "tagline": "#1C5DFF",
+        "menu_bg": "#EEF6FF",
+        "menu_btn": "#DDEEFF",
+        "menu_btn_h": "#CFE6FF",
+        "menu_dd_bg": "#F6FAFF",
+        "menu_dd_text": "#0B1B33",
+        "btn_text": "#061427",
+    },
+}
+
+
+def _create_gradient_button_img(width: int = 190, height: int = 40, variant: str = "dark") -> Image.Image:
+    if variant == "light":
+        c1 = (40, 120, 255)
+        c2 = (120, 190, 255)
+    else:
+        c1 = (0, 91, 197)
+        c2 = (80, 140, 255)
 
     img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
@@ -57,49 +86,37 @@ class WelcomeWindow(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        cfg = load_cfg()
+        cfg = load_cfg() or {}
         lang_default = str(cfg.get("language", "UA")).upper()
         theme_default = str(cfg.get("theme", "Dark")).capitalize()
 
         ctk.set_default_color_theme("dark-blue")
-        ctk.set_appearance_mode(
-            "light" if theme_default.lower().startswith("light") else "dark"
-        )
+        ctk.set_appearance_mode("light" if theme_default.lower().startswith("light") else "dark")
+
+        self.lang_var = StringVar(value="EN" if lang_default == "EN" else "UA")
+        self.theme_var = StringVar(value="Light" if theme_default.lower().startswith("light") else "Dark")
 
         self.title("Emotion Analyzer — Welcome")
         self.geometry(f"{WINDOW_W}x{WINDOW_H}+200+80")
         self.resizable(False, False)
-        self.configure(fg_color=PALETTE["bg"])
         self._music_proc = None
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        # ---------- background ----------
-        bg_path = _asset_path("background.png")
-        bg_raw = Image.open(bg_path)
-        self._bg_image = ctk.CTkImage(bg_raw, size=(WINDOW_W, WINDOW_H))
-        bg_label = ctk.CTkLabel(self, image=self._bg_image, text="")
-        bg_label.place(x=0, y=0, relwidth=1, relheight=1)
+        bg_dark_path = _asset_path("background.png")
+        bg_light_path = _asset_path("background_light.png")
 
-        # ---------- card ----------
-        self.card = ctk.CTkFrame(
-            self,
-            fg_color="#040c24",
-            width=340,
-            height=310,
-            border_width=1,
-            border_color="#1e40af",  # темно-синій неон
+        bg_dark = Image.open(bg_dark_path)
+        bg_light = Image.open(bg_light_path) if os.path.exists(bg_light_path) else bg_dark
 
-        )
+        self._bg_image = ctk.CTkImage(light_image=bg_light, dark_image=bg_dark, size=(WINDOW_W, WINDOW_H))
+        self._bg_label = ctk.CTkLabel(self, image=self._bg_image, text="")
+        self._bg_label.place(x=0, y=0, relwidth=1, relheight=1)
+
+        self.card = ctk.CTkFrame(self, width=340, height=310, border_width=1, corner_radius=14)
         self.card.place(x=60, rely=0.5, anchor="w")
         self.card.grid_columnconfigure(0, weight=1)
         self.card.grid_propagate(False)
 
-        self.lang_var = StringVar(value="EN" if lang_default == "EN" else "UA")
-        self.theme_var = StringVar(
-            value="Light" if theme_default.lower().startswith("light") else "Dark"
-        )
-
-        # ---------- header: тільки logo + назва ----------
         top = ctk.CTkFrame(self.card, fg_color="transparent")
         top.grid(row=0, column=0, sticky="ew", padx=20, pady=(18, 10))
         top.grid_columnconfigure(0, weight=1)
@@ -107,29 +124,34 @@ class WelcomeWindow(ctk.CTk):
         header_left = ctk.CTkFrame(top, fg_color="transparent")
         header_left.grid(row=0, column=0, sticky="w")
 
+        self._logo_img = None
+        self._logo_lbl = None
+        self._title_lbl = None
+
+        logo_dark_path = _asset_path("logo_face.png")
+        logo_light_path = _asset_path("logo_face_light.png")
+
         try:
-            logo_raw = Image.open(_asset_path("logo_face.png"))
-            self._logo_img = ctk.CTkImage(logo_raw, size=(32, 32))
-            ctk.CTkLabel(header_left, image=self._logo_img, text="").pack(
-                side="left", padx=(0, 10)
-            )
+            logo_dark = Image.open(logo_dark_path)
+            logo_light = Image.open(logo_light_path) if os.path.exists(logo_light_path) else logo_dark
+            self._logo_img = ctk.CTkImage(light_image=logo_light, dark_image=logo_dark, size=(32, 32))
+            self._logo_lbl = ctk.CTkLabel(header_left, image=self._logo_img, text="")
+            self._logo_lbl.pack(side="left", padx=(0, 10))
         except Exception:
             self._logo_img = None
 
-        ctk.CTkLabel(
+        self._title_lbl = ctk.CTkLabel(
             header_left,
             text="Emotion Analyzer",
             font=("Inter", 18, "bold"),
-            text_color=PALETTE["text"],
             wraplength=300,
-        ).pack(side="left", anchor="w")
+        )
+        self._title_lbl.pack(side="left", anchor="w")
 
-        # ---------- hero text ----------
         self.tagline_lbl = ctk.CTkLabel(
             self.card,
             text="",
             font=("Inter", 14, "bold"),
-            text_color="#92C1FF",
             justify="left",
             wraplength=300,
         )
@@ -139,78 +161,56 @@ class WelcomeWindow(ctk.CTk):
             self.card,
             text="",
             font=("Inter", 13),
-            text_color=PALETTE["muted"],
             justify="left",
             wraplength=280,
         )
         self.features_lbl.grid(row=2, column=0, sticky="w", padx=20, pady=(0, 20))
 
-        # ---------- Language / Theme ПІД текстом ----------
         controls = ctk.CTkFrame(self.card, fg_color="transparent")
         controls.grid(row=3, column=0, sticky="w", padx=20, pady=(0, 13))
-        controls.grid_columnconfigure(1, weight=0)
-        controls.grid_columnconfigure(3, weight=0)
 
-        # language row
-        ctk.CTkLabel(
-            controls, text="Language", text_color=PALETTE["muted"], font=("Inter", 10)
-        ).grid(row=0, column=0, padx=(0, 6), sticky="w")
+        self._lang_lbl = ctk.CTkLabel(controls, text="Language", font=("Inter", 10))
+        self._lang_lbl.grid(row=0, column=0, padx=(0, 6), sticky="w")
 
-        lang_menu = ctk.CTkOptionMenu(
+        self.lang_menu = ctk.CTkOptionMenu(
             controls,
             values=["UA", "EN"],
             variable=self.lang_var,
-            fg_color="#020617",
-            button_color="#111827",
-            button_hover_color="#1f2937",
-            text_color=PALETTE["text"],
-            dropdown_fg_color="#020617",
-            dropdown_text_color=PALETTE["text"],
             font=("Inter", 10),
             width=70,
             corner_radius=14,
-
         )
-        lang_menu.grid(row=0, column=1, padx=(0, 16), sticky="w")
+        self.lang_menu.grid(row=0, column=1, padx=(0, 16), sticky="w")
 
-        # theme row
-        ctk.CTkLabel(
-            controls, text="Theme", text_color=PALETTE["muted"], font=("Inter", 10)
-        ).grid(row=0, column=2, padx=(0, 6), sticky="w")
+        self._theme_lbl = ctk.CTkLabel(controls, text="Theme", font=("Inter", 10))
+        self._theme_lbl.grid(row=0, column=2, padx=(0, 6), sticky="w")
 
-        theme_menu = ctk.CTkOptionMenu(
+        self.theme_menu = ctk.CTkOptionMenu(
             controls,
             values=["Dark", "Light"],
             variable=self.theme_var,
-            fg_color="#020617",
-            button_color="#111827",
-            button_hover_color="#1f2937",
-            text_color=PALETTE["text"],
-            dropdown_fg_color="#020617",
-            dropdown_text_color=PALETTE["text"],
             font=("Inter", 10),
             width=70,
             corner_radius=14,
         )
-        theme_menu.grid(row=0, column=3, sticky="w")
+        self.theme_menu.grid(row=0, column=3, sticky="w")
 
-        # ---------- gradient "button" ----------
-        grad_pil = _create_gradient_button_img(190, 40)
-        self._btn_grad_img = ctk.CTkImage(light_image=grad_pil, size=(190, 40))
+        grad_dark = _create_gradient_button_img(190, 40, variant="dark")
+        grad_light = _create_gradient_button_img(190, 40, variant="light")
+        self._btn_grad_img = ctk.CTkImage(light_image=grad_light, dark_image=grad_dark, size=(190, 40))
 
         self.primary_btn = ctk.CTkLabel(
             self.card,
             text="",
             image=self._btn_grad_img,
             compound="center",
-            text_color="#020617",
             font=("Inter", 14, "bold"),
         )
         self.primary_btn.grid(row=4, column=0, padx=20, pady=(4, 10), sticky="w")
         self.primary_btn.bind("<Button-1>", lambda e: self._on_continue())
         self.primary_btn.bind("<Enter>", lambda e: self.primary_btn.configure(cursor="hand2"))
+        self.primary_btn.bind("<Leave>", lambda e: self.primary_btn.configure(cursor=""))
 
-        # реакції на зміну мови/теми
         self.lang_var.trace_add("write", lambda *_: self._update_texts())
         self.theme_var.trace_add("write", lambda *_: self._apply_theme())
 
@@ -218,43 +218,69 @@ class WelcomeWindow(ctk.CTk):
         self._update_texts()
         self._maybe_play_music()
 
+    def _palette_key(self) -> str:
+        return "light" if self.theme_var.get().lower().startswith("light") else "dark"
+
     def _apply_theme(self):
-        theme = self.theme_var.get().lower()
-        ctk.set_appearance_mode("light" if theme.startswith("light") else "dark")
+        is_light = self.theme_var.get().lower().startswith("light")
+        ctk.set_appearance_mode("light" if is_light else "dark")
+
+        pal = PALETTES[self._palette_key()]
+        self.configure(fg_color=pal["bg"])
+        self.card.configure(fg_color=pal["card"], border_color=pal["card_border"])
+        self._title_lbl.configure(text_color=pal["title"])
+        self.tagline_lbl.configure(text_color=pal["tagline"])
+        self.features_lbl.configure(text_color=pal["muted"])
+
+        self._lang_lbl.configure(text_color=pal["muted"])
+        self._theme_lbl.configure(text_color=pal["muted"])
+
+        for m in (self.lang_menu, self.theme_menu):
+            m.configure(
+                fg_color=pal["menu_bg"],
+                button_color=pal["menu_btn"],
+                button_hover_color=pal["menu_btn_h"],
+                text_color=pal["text"],
+                dropdown_fg_color=pal["menu_dd_bg"],
+                dropdown_text_color=pal["menu_dd_text"],
+            )
+
+        self.primary_btn.configure(text_color=pal["btn_text"])
 
     def _update_texts(self):
         lang = self.lang_var.get().upper()
-
         if lang == "EN":
             tagline = "Your emotion-aware study & work companion"
             features = (
-                "We track your emotions from the webcam and gently suggest micro-breaks so you burn out less while studying and working."
+                "We track your emotions from the webcam and gently suggest micro-breaks "
+                "so you burn out less while studying and working."
             )
             btn_text = "Start"
+            self._lang_lbl.configure(text="Language")
+            self._theme_lbl.configure(text="Theme")
         else:
             tagline = "Твій емоційно-чутливий асистент для навчання й роботи"
             features = (
-                "Ми відстежуємо емоції з вебкамери та час від часу пропонуємо мікропаузи, щоб ти менше вигорав/ла під час навчання та роботи."
+                "Ми відстежуємо емоції з вебкамери та час від часу пропонуємо мікропаузи, "
+                "щоб ти менше вигорав/ла під час навчання та роботи."
             )
             btn_text = "Почати"
+            self._lang_lbl.configure(text="Language")
+            self._theme_lbl.configure(text="Theme")
 
         self.tagline_lbl.configure(text=tagline)
         self.features_lbl.configure(text=features)
         self.primary_btn.configure(text=btn_text)
 
     def _maybe_play_music(self):
-        # macOS: граємо через afplay
         if sys.platform != "darwin":
             return
-
         try:
-            # якщо вже грає — не стартуємо знов
             if getattr(self, "_music_proc", None) is not None:
                 return
             path = _asset_path("welcome.mp3")
             if not os.path.exists(path):
                 path = _asset_path("live.mp3")
-
             if os.path.exists(path):
                 self._music_proc = subprocess.Popen(["afplay", path])
         except Exception:
@@ -270,11 +296,10 @@ class WelcomeWindow(ctk.CTk):
 
     def _on_continue(self):
         self._stop_music()
-        cfg = load_cfg()
+
+        cfg = load_cfg() or {}
         cfg["language"] = self.lang_var.get().upper()
-        cfg["theme"] = (
-            "Light" if self.theme_var.get().lower().startswith("light") else "Dark"
-        )
+        cfg["theme"] = "Light" if self.theme_var.get().lower().startswith("light") else "Dark"
         save_cfg(cfg)
 
         self.destroy()
