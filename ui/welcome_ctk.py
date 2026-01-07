@@ -96,7 +96,7 @@ class WelcomeWindow(ctk.CTk):
         self.lang_var = StringVar(value="EN" if lang_default == "EN" else "UA")
         self.theme_var = StringVar(value="Light" if theme_default.lower().startswith("light") else "Dark")
 
-        self.title("Emotion Analyzer — Welcome")
+        self.title("MoodTracker — Welcome")
         self.geometry(f"{WINDOW_W}x{WINDOW_H}+200+80")
         self.resizable(False, False)
         self._music_proc = None
@@ -142,7 +142,7 @@ class WelcomeWindow(ctk.CTk):
 
         self._title_lbl = ctk.CTkLabel(
             header_left,
-            text="Emotion Analyzer",
+            text="MoodTracker",
             font=("Inter", 18, "bold"),
             wraplength=300,
         )

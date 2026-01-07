@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 from ui.common import LABELS, EMO_COLORS, fmt_mmss, fmt_hhmm
+from core.storage import load_moments_aggregate
 
 
 def _project_root() -> str:
@@ -34,6 +35,53 @@ def _register_dejavu_fonts() -> tuple[str, str]:
     pdfmetrics.registerFont(TTFont(bold_name, bold_path))
     return regular_name, bold_name
 
+def _period_to_key(period: str) -> str:
+    p = (period or "").strip()
+    # EN keys
+    if p in ("Today", "Last 7 days", "All time"):
+        return p
+    # UA shown values
+    ua = {
+        "Сьогодні": "Today",
+        "Останні 7 днів": "Last 7 days",
+        "За весь час": "All time",
+    }
+    return ua.get(p, "All time")
+
+
+def _draw_donut_on_canvas(
+    c,
+    cx: float,
+    cy: float,
+    r: float,
+    items: list[tuple[str, int]],
+    total: int,
+    colors_mod,
+    panel_hex: str,
+):
+    """
+    items: [(emo, count)] тільки ті, що >0 (або topN+Other)
+    """
+    if total <= 0:
+        return
+
+    start = 90.0
+    for emo, cnt in items:
+        if cnt <= 0:
+            continue
+        extent = 360.0 * (cnt / total)
+
+        c.setFillColor(colors_mod.HexColor(EMO_COLORS.get(emo, "#94a3b8")))
+        c.setStrokeColor(colors_mod.HexColor(panel_hex))
+        c.setLineWidth(0.6)
+        c.wedge(cx - r, cy - r, cx + r, cy + r, startAng=start, extent=-extent, stroke=1, fill=1)
+        start -= extent
+
+    # donut hole
+    inner = r * 0.58
+    c.setFillColor(colors_mod.HexColor(panel_hex))
+    c.setStrokeColor(colors_mod.HexColor(panel_hex))
+    c.circle(cx, cy, inner, stroke=1, fill=1)
 
 def export_stats_pdf(
     save_path: str,
@@ -61,7 +109,8 @@ def export_stats_pdf(
     page_w, page_h = A4
     margin = 2 * cm
 
-    title = "Emotion Analyzer — Session statistics" if lang == "EN" else "Emotion Analyzer — Статистика сесій"
+    APP_NAME = "MoodTracker"  # або як хочеш
+    title = f"{APP_NAME} — Session statistics" if lang == "EN" else f"{APP_NAME} — Статистика сесій"
     c.setFont(FONT_BOLD, 18)
     y = page_h - margin
     c.setFillColor(colors.black)
@@ -167,6 +216,87 @@ def export_stats_pdf(
         c.drawString(table_x + 6.0 * cm, table_y, fmt_mmss(sec))
         c.drawString(table_x + 9.0 * cm, table_y, f"{pct}%")
         table_y -= 0.6 * cm
+
+    # ============================
+    # PAGE 2: Moments breakdown
+    # ============================
+    c.showPage()
+
+    period_key = _period_to_key(period)
+    moments_total, moments_by_emo = load_moments_aggregate(period_key)
+
+    y2 = page_h - margin
+    c.setFillColor(colors.black)
+    c.setFont(FONT_BOLD, 18)
+    c.drawString(margin, y2, "Moments breakdown" if lang == "EN" else "Розподіл моментів")
+
+    y2 -= 0.9 * cm
+    c.setFont(FONT_REG, 12)
+    if lang == "EN":
+        c.drawString(margin, y2, f"Period: {period}")
+        y2 -= 0.65 * cm
+        c.drawString(margin, y2, f"Total moments: {moments_total}")
+    else:
+        c.drawString(margin, y2, f"Період: {period}")
+        y2 -= 0.65 * cm
+        c.drawString(margin, y2, f"Моментів всього: {moments_total}")
+
+    # --- Donut + legend layout ---
+    block_top = y2 - 1.0 * cm
+    donut_r = 3.6 * cm
+    donut_cx = margin + donut_r + 0.4 * cm
+    donut_cy = block_top - donut_r
+
+    # підготуємо items: top-6 + Other (щоб легенда не розлазилась)
+    vals = [(emo, int(moments_by_emo.get(emo, 0) or 0)) for emo in LABELS]
+    vals = [(e, v) for e, v in vals if v > 0]
+    vals.sort(key=lambda x: x[1], reverse=True)
+
+    top = vals[:6]
+    other_sum = sum(v for _, v in vals[6:])
+    items = top[:]
+    if other_sum > 0:
+        items.append(("other", other_sum))
+        # колір для other
+        EMO_COLORS.setdefault("other", "#94a3b8")
+
+    # donut
+    panel_hex = "#ffffff"  # фон сторінки (білий). якщо хочеш під "panel" — постав свій hex.
+    _draw_donut_on_canvas(c, donut_cx, donut_cy, donut_r, items, int(moments_total), colors, panel_hex)
+
+    # center text
+    c.setFillColor(colors.black)
+    c.setFont(FONT_BOLD, 18)
+    c.drawCentredString(donut_cx, donut_cy + 4, str(int(moments_total)))
+
+    c.setFillColor(colors.HexColor("#6b7280"))
+    c.setFont(FONT_REG, 10)
+    c.drawCentredString(
+        donut_cx,
+        donut_cy - 12,
+        "moments" if lang == "EN" else "моментів",
+    )
+
+    # legend справа
+    legend_x = margin + 9.0 * cm
+    legend_y = block_top - 0.2 * cm
+    c.setFillColor(colors.black)
+    c.setFont(FONT_BOLD, 12)
+    c.drawString(legend_x, legend_y, "Counts" if lang == "EN" else "К-сть")
+
+    legend_y -= 0.8 * cm
+    c.setFont(FONT_REG, 12)
+
+    for emo, cnt in items:
+        c.setFillColor(colors.HexColor(EMO_COLORS.get(emo, "#94a3b8")))
+        c.rect(legend_x, legend_y - 0.18 * cm, 0.25 * cm, 0.25 * cm, stroke=0, fill=1)
+
+        c.setFillColor(colors.black)
+        label = emo.capitalize() if emo != "other" else ("Other" if lang == "EN" else "Інше")
+        c.drawString(legend_x + 0.4 * cm, legend_y, f"{label}")
+        c.drawRightString(legend_x + 6.5 * cm, legend_y, str(cnt))
+
+        legend_y -= 0.6 * cm
 
     c.showPage()
     c.save()

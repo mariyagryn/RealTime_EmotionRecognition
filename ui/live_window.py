@@ -1,16 +1,16 @@
 # ui/live_window.py
 from __future__ import annotations
-
 import os
 import time
 import threading
 import random
 from datetime import datetime
+from core.moments_manager import MomentsManager, MomentConfig
 
 import tkinter as tk
 from tkinter import messagebox as tk_messagebox
 from tkinter import filedialog as tk_filedialog
-
+from ui.views.moments_view import MomentsView
 import customtkinter as ctk
 import cv2
 
@@ -241,6 +241,23 @@ class LiveWindow(ctk.CTk):
         self._t0 = time.monotonic()
         self._last_tick = time.time()
 
+        # айді поточної сесії (можна взяти час старту)
+        self._session_id = self._session_started_at
+
+        self.session_id = self._session_id
+
+        self.moments_mgr = MomentsManager(
+            session_id=str(self.session_id),
+            cfg=MomentConfig(
+                fps=15,
+                pre_sec=2.0,
+                post_sec=3.0,
+                min_conf=0.65,
+                min_streak_sec=2.0,
+                cooldown_sec=20.0
+            )
+        )
+
         self._emotion_acc: dict[str, float] = {k: 0.0 for k in LABELS}
         self._streak_label: str | None = None
         self._streak_sec: float = 0.0
@@ -270,7 +287,7 @@ class LiveWindow(ctk.CTk):
         self._apply_theme(save=False, rebuild=False)
 
         # window
-        self.title("Emotion — Live")
+        self.title("MoodTracker")
         self.geometry("1100x760+40+40")
         self.minsize(900, 600)
         self.grid_columnconfigure(0, weight=1)
@@ -356,7 +373,7 @@ class LiveWindow(ctk.CTk):
 
         title = ctk.CTkLabel(
             self.header,
-            text="Emotion Analyzer",
+            text="MoodTracker",
             text_color=self.palette["text"],
             font=("Inter", 18, "bold"),
         )
@@ -378,7 +395,7 @@ class LiveWindow(ctk.CTk):
                 text_color=self.palette["text"],
                 corner_radius=999,
                 font=("Inter", 13),
-                command=lambda: self._switch_view(name),
+                command=lambda n=name: self._on_nav(n),  # <-- тут тепер _on_nav
             )
             b.pack(side="left", padx=6)
             self._nav_buttons[name] = b
@@ -389,10 +406,14 @@ class LiveWindow(ctk.CTk):
                 self.btn_about = b
             elif name == "stats":
                 self.btn_stats = b
+            elif name == "moments":
+                self.btn_moments = b
 
         nav_btn("Live", "live")
         nav_btn("About", "about")
         nav_btn("Statistics", "stats")
+        nav_btn("Moments", "moments")
+
 
         self.lang_menu = ctk.CTkOptionMenu(
             right,
@@ -465,6 +486,14 @@ class LiveWindow(ctk.CTk):
             self.palette,
             lang=self.lang_var.get(),
             on_export_pdf=self._export_stats_pdf,
+            on_go_moments=lambda: self._switch_view("moments"),
+        )
+
+        # Moments
+        self.view_moments = MomentsView(
+            parent=self.main,
+            palette=self.palette,
+            lang=self.lang_var.get(),
         )
 
     def _rebuild_ui(self, keep_view: str = "live"):
@@ -495,10 +524,23 @@ class LiveWindow(ctk.CTk):
             except Exception:
                 pass
 
+    def _on_nav(self, page_id: str):
+        if page_id == "stats":
+            self._switch_view("stats")
+
+        elif page_id == "moments":
+            self._switch_view("moments")
+
+        else:
+            self._switch_view(page_id)
+
+        self._current_view = page_id
+        self._paint_nav_active()
+
     def _switch_view(self, name: str):
         self._current_view = name
 
-        for v in (self.view_live, self.view_about, self.view_stats):
+        for v in (self.view_live, self.view_about, self.view_stats, self.view_moments):
             try:
                 v.grid_forget()
             except Exception:
@@ -518,6 +560,18 @@ class LiveWindow(ctk.CTk):
                 self.view_live.set_paused(True)
             except Exception:
                 pass
+        elif name == "moments":
+            self.view_moments.grid(row=0, column=0, sticky="nsew")
+            self.flags.paused = True
+            try:
+                self.view_live.set_paused(True)
+            except Exception:
+                pass
+            try:
+                self.view_moments.draw()  # щоб одразу оновити список
+            except Exception:
+                pass
+
         else:
             self.view_stats.grid(row=0, column=0, sticky="nsew")
             self.flags.paused = True
@@ -544,10 +598,12 @@ class LiveWindow(ctk.CTk):
                 self.btn_live.configure(text="Live")
                 self.btn_about.configure(text="About")
                 self.btn_stats.configure(text="Statistics")
+                self.btn_moments.configure(text="Moments")
             else:
                 self.btn_live.configure(text="Онлайн")
                 self.btn_about.configure(text="Про застосунок")
                 self.btn_stats.configure(text="Статистика")
+                self.btn_moments.configure(text="Моменти")
         except Exception as e:
             print("Nav text update error:", e)
 
@@ -556,6 +612,12 @@ class LiveWindow(ctk.CTk):
                 self.view_about.rebuild()
         except Exception as e:
             print("AboutView rebuild error:", e)
+
+        try:
+            if hasattr(self, "view_moments") and self.view_moments is not None:
+                self.view_moments.set_lang(lang)
+        except Exception as e:
+            print("MomentsView set_lang error:", e)
 
         try:
             if (
@@ -995,6 +1057,13 @@ class LiveWindow(ctk.CTk):
             pass
 
         label, conf = self.analyzer.current
+
+        if not self.flags.paused:
+            frame_bgr = getattr(self, "_last_frame_bgr", None)
+            if frame_bgr is not None:
+                session_time_sec = time.monotonic() - self._t0
+                self.moments_mgr.update(label, float(conf), frame_bgr, session_time_sec=session_time_sec)
+
         now = time.time()
         dt = now - getattr(self, "_last_tick", now)
         self._last_tick = now

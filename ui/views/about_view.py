@@ -97,9 +97,9 @@ class AboutView(ctk.CTkFrame):
 
         # ---- тексти EN / UA ----
         if lang == "EN":
-            title = "What is Emotion Analyzer?"
+            title = "What is MoodTracker?"
             intro = (
-                "Emotion Analyzer is a desktop assistant that helps you track "
+                "MoodTracker is a desktop assistant that helps you track "
                 "your emotional state while studying or working at the computer."
             )
             bullets_main = [
@@ -117,9 +117,9 @@ class AboutView(ctk.CTkFrame):
             wrap_main = 470
             wrap_bullets = 470
         else:
-            title = "Що таке Emotion Analyzer?"
+            title = "Що таке MoodTrackerr?"
             intro = (
-                "Emotion Analyzer — це настільний асистент, який допомагає "
+                "MoodTracker — це настільний асистент, який допомагає "
                 "відстежувати твій емоційний стан під час навчання або роботи за компʼютером."
             )
             bullets_main = [

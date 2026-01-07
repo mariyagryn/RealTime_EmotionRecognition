@@ -61,3 +61,101 @@ def load_stats_aggregate(period: str, path: str = "sessions/summary.csv"):
 
     total_sec = sum(totals.values())
     return totals, sessions_count, total_sec
+
+
+import os
+import csv
+import threading
+from datetime import datetime, timedelta
+from typing import List, Dict, Any
+
+_STORAGE_LOCK = threading.Lock()
+
+STORAGE_DIR = "storage"
+MOMENTS_DIR = os.path.join(STORAGE_DIR, "moments")
+MOMENTS_CSV = os.path.join(MOMENTS_DIR, "moments.csv")
+
+MOMENTS_FIELDS = [
+    "timestamp",
+    "session_time_sec",
+    "emotion",
+    "conf",
+    "streak_sec",
+    "session_id",
+    "video_path",
+]
+
+
+def ensure_moments_storage() -> None:
+    os.makedirs(MOMENTS_DIR, exist_ok=True)
+    if not os.path.exists(MOMENTS_CSV):
+        with _STORAGE_LOCK:
+            if not os.path.exists(MOMENTS_CSV):
+                with open(MOMENTS_CSV, "w", newline="", encoding="utf-8") as f:
+                    w = csv.DictWriter(f, fieldnames=MOMENTS_FIELDS)
+                    w.writeheader()
+
+def append_moment(row: Dict[str, Any]) -> None:
+    ensure_moments_storage()
+
+    safe = {k: row.get(k, "") for k in MOMENTS_FIELDS}
+    ts = safe.get("timestamp", "")
+    if isinstance(ts, datetime):
+        safe["timestamp"] = ts.isoformat(timespec="seconds")
+
+    with _STORAGE_LOCK:
+        with open(MOMENTS_CSV, "a", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=MOMENTS_FIELDS)
+            w.writerow(safe)
+
+def _parse_dt(ts: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(ts)
+    except Exception:
+        return None
+
+
+def load_moments_list(period: str = "All time") -> List[Dict[str, Any]]:
+    ensure_moments_storage()
+    period = (period or "All time").strip()
+
+    now = datetime.now()
+    if period == "Today":
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    elif period == "Last 7 days":
+        start = now - timedelta(days=7)
+    else:
+        start = None
+
+    items: List[Dict[str, Any]] = []
+    with _STORAGE_LOCK:
+        with open(MOMENTS_CSV, "r", newline="", encoding="utf-8") as f:
+            r = csv.DictReader(f)
+            for row in r:
+                ts = row.get("timestamp", "") or ""
+                dt = _parse_dt(ts)
+                if start and dt:
+                    if dt < start:
+                        continue
+                elif start and not dt:
+                    continue
+                items.append(dict(row))
+
+    def key_fn(x: Dict[str, Any]) -> float:
+        dt = _parse_dt(x.get("timestamp", "") or "")
+        return dt.timestamp() if dt else 0.0
+
+    items.sort(key=key_fn, reverse=True)
+    return items
+
+
+def load_moments_aggregate(period: str = "All time"):
+    items = load_moments_list(period) or []
+
+    by_emotion = {k: 0 for k in LABELS}
+    for row in items:
+        emo = (row.get("emotion") or "").strip().lower()
+        if emo in by_emotion:
+            by_emotion[emo] += 1
+
+    return len(items), by_emotion
